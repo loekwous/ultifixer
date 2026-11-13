@@ -175,6 +175,17 @@ en hoef je maar één keer te doen.
     #cura-window(w: 300pt, ht: 80pt)[#cura-plate]
   ])
 
+#v(1fr)
+#block(breakable: false, fill: panel, radius: 6pt, inset: 10pt, width: 100%)[
+  #set text(8.5pt, fill: muted)
+  *Wat doet Ultifixer precies?* Het zet in Cura _Buitencontour Spiraliseren_ (vaasmodus) aan, met één wand
+  van maximaal 1,5 × de nozzle, een dichte bodem (meestal 1 mm), geen vulling en geen bovenkant.
+  Bij een 3MF van Bambu Studio, OrcaSlicer of PrusaSlicer leest het de vaasmodus uit het bestand. Bij een STL kijkt het naar
+  de vorm: één dichte omtrek op elke hoogte, een vlakke bodem en een open rand.
+  Broncode en vragen: #text(fill: blue)[github.com/loekwous/ultifixer].
+]
+
+#pagebreak()
 #step(3, "Sleep het bestand op Cura",
   [Open de map *Downloads* (Verkenner). Pak #ui[Ultifixer.curapackage] met de muis vast en laat het los
    boven het Cura-venster, ergens op het grijze printbed.],
@@ -230,27 +241,14 @@ en hoef je maar één keer te doen.
 
 #step(7, "Open de vaas zoals altijd",
   [Open het bestand van MakerWorld (.3mf of .stl) zoals je gewend bent. Ultifixer kijkt mee. Is het een vaas,
-   dan verschijnt er rechts in beeld een melding en staat de vaasmodus al aan.],
-  box(width: 100%, height: 140pt)[
-    #cura-window(w: 100%, ht: 136pt)[
-      #cura-plate
-      #place(center + horizon, dx: -90pt, dy: 4pt, vase(scale: 0.8))
-      #place(top + right, dx: -8pt, dy: 8pt, cura-message("Ultifixer: vaas herkend",
-        [*Stratos Pillar.3mf* wordt als holle vaas geprint, want het bestand zegt: vaasmodus.
-         Cura-vaasmodus staat aan (wand 0,6 mm, bodem 1 mm).],
-        buttons: ("Ongedaan maken", "Niet meer automatisch")))
-    ]
-  ])
+   dan verschijnt er onderin een melding en staat de vaasmodus al aan. Zo ziet dat eruit in Cura:],
+  box(width: 88%, stroke: 0.8pt + line-c, radius: 4pt, clip: true, image("img/cura-melding.png", width: 100%)))
 
 #step(8, "Slicen en printen",
-  [Klik zoals altijd op #ui[Slicen] en daarna op printen of opslaan. In het voorbeeld zie je één dunne wand:
-   de vaas wordt hol, net als op de foto's op MakerWorld.],
-  box(width: 100%, height: 62pt)[
-    #grid(columns: (auto, auto, auto), column-gutter: 16pt, align: horizon,
-      [#vase(scale: 0.75) #v(-4pt) #text(7.5pt, fill: muted)[zonder Ultifixer: vol]],
-      text(18pt, fill: blue)[→],
-      [#vase(scale: 0.75, hollow: true) #v(-4pt) #text(7.5pt, fill: ok-green, weight: "bold")[met Ultifixer: hol]])
-  ])
+  [Klik zoals altijd op #ui[Slicen] en daarna op printen of opslaan. De vaas wordt één dunne wand, net als op de
+   foto's op MakerWorld. In onze test: *20 g en 1 uur 16 minuten* in plaats van 94 g en 4 uur.
+   Zie je ook een melding over een ongebruikte printkern (_Extruder 2_)? Die is normaal; je mag hem wegklikken.],
+  [])
 
 == Goed om te weten
 #set list(spacing: 0.55em)
@@ -268,11 +266,3 @@ en hoef je maar één keer te doen.
 Klik rechtsboven in Cura op #ui[Marktplaats] › #ui[Pakketten beheren]. Zoek *Ultifixer*, klik op
 #ui[De-installeren] en start Cura opnieuw.
 
-#block(breakable: false, fill: panel, radius: 6pt, inset: 10pt, width: 100%)[
-  #set text(8.5pt, fill: muted)
-  *Wat doet Ultifixer precies?* Het zet in Cura _Buitencontour Spiraliseren_ (vaasmodus) aan, met één wand
-  van maximaal 1,5 × de nozzle, een dichte bodem (meestal 1 mm), geen vulling en geen bovenkant.
-  Bij een 3MF van Bambu Studio, OrcaSlicer of PrusaSlicer leest het de vaasmodus uit het bestand. Bij een STL kijkt het naar
-  de vorm: één dichte omtrek op elke hoogte, een vlakke bodem en een open rand.
-  Broncode en vragen: #text(fill: blue)[github.com/loekwous/ultifixer].
-]
