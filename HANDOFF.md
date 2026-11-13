@@ -21,7 +21,15 @@ Stand op 2026-11-13, voor een nieuwe Claude Code-sessie op een machine met meer 
    Cura laadt de cilinder als gewoon mesh → vaas massief. Plan: in de plugin bij een Bambu-3MF de parts met
    `negative_part` mappen op de child-nodes van de groep (volgorde van `<component>` in 3D/3dmodel.model) en
    per-object instellen: `cutting_mesh=True`, `wall_line_count=0`, `infill_sparse_density=0`, `top_layers=0`,
-   `bottom_layers=0`, `initial_bottom_layers=0`. Modifier/support-parts (`modifier_part`, `support_blocker`,
+   `bottom_layers=0`, `initial_bottom_layers=0`.
+   **Al geverifieerd met CuraEngine 5.13 CLI** (vaas + cilinder als tweede mesh met bovenstaande instellingen,
+   `center_object=false`, 2 wanden, 10% infill): van z=32 tot z≈176 mm ligt de dichtstbijzijnde extrusie overal op
+   40,1 mm van het midden (cilinderstraal 40) → het gat werkt, met binnenwand. Open punt: vanaf z≈190 mm staat er nog
+   materiaal binnen r<40 (max r 47,7 op z=192; 37,9 op z=200). Uitzoeken: klopt mijn transformatie van de cilinder
+   (component-transform in 3D/3dmodel.model: z-schaal 1.0099, +30.77; model_settings noemt z-schaal 1.0199, +61.85),
+   en vergelijk met een Bambu Studio-slice. Let op: `center_object` in CuraEngine centreert per mesh en verschuift
+   dan de cilinder — in Cura zelf blijft de groepstransformatie behouden, dus daar speelt dat niet.
+   Modifier/support-parts (`modifier_part`, `support_blocker`,
    `support_enforcer`) niet laten printen (bv. `anti_overhang_mesh=True`). Eerst met CuraEngine verifiëren dat de
    cutting mesh echt een leeg gat met binnenwand geeft, daarna e2e-fixture (Bambu-3MF met negatieve cilinder) en
    check "geen extrusie binnen de gatstraal".
