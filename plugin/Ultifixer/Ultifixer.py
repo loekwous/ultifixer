@@ -86,6 +86,7 @@ class Ultifixer(QObject, Extension):
         self._vase_nodes: List[object] = []
         self._saved_values: List[Tuple[object, str, object]] = []
         self._message: Optional[Message] = None
+        self._jobs: Dict[_AnalyseJob, str] = {}
         self.busy = 0  # number of files still being analysed (used by the tests)
         self.events: List[Dict[str, object]] = []  # what happened, newest last (used by the tests)
 
@@ -155,10 +156,18 @@ class Ultifixer(QObject, Extension):
             return
         self.busy += 1
         job = _AnalyseJob(meshes, file_name)
-        job.finished.connect(lambda finished_job: self._app.callLater(self._onAnalysed, finished_job, file_name))
+        # UM signals hold weak references to plain functions, so connect a bound method
+        # and keep the job alive here until it reports back.
+        self._jobs[job] = file_name
+        job.finished.connect(self._onJobFinished)
         job.start()
 
-    def _onAnalysed(self, job: _AnalyseJob, file_name: str) -> None:
+    def _onJobFinished(self, job: _AnalyseJob) -> None:
+        # Signals emitted from the worker thread arrive here on the main thread.
+        self._app.callLater(self._onAnalysed, job)
+
+    def _onAnalysed(self, job: _AnalyseJob) -> None:
+        file_name = self._jobs.pop(job, "")
         self.busy = max(0, self.busy - 1)
         reports = job.getResult() or []
         vases = [node for node, report in reports if report.looks_like_vase and node.getParent() is not None]
