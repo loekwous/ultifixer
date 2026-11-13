@@ -75,28 +75,47 @@ def _weld(vertices: numpy.ndarray, indices: Optional[numpy.ndarray]) -> Tuple[nu
     return welded, inverse[faces]
 
 
-def _label(mask: numpy.ndarray) -> Tuple[numpy.ndarray, int]:
-    """4-connected component labels of a boolean grid (0 = background)."""
-    try:
-        from scipy import ndimage  # bundled with Cura
-        labels, count = ndimage.label(mask)
-        return labels, int(count)
-    except ImportError:  # pragma: no cover - fallback without scipy
-        size = mask.size
-        labels = numpy.where(mask.reshape(-1), numpy.arange(1, size + 1), 0).reshape(mask.shape)
-        while True:
-            padded = numpy.pad(labels, 1)
-            neighbours = numpy.stack([padded[1:-1, 1:-1], padded[:-2, 1:-1], padded[2:, 1:-1],
-                                      padded[1:-1, :-2], padded[1:-1, 2:]])
-            neighbours = numpy.where(neighbours == 0, size + 1, neighbours)
-            new = numpy.where(mask, neighbours.min(axis=0), 0)
-            if numpy.array_equal(new, labels):
-                break
-            labels = new
-        unique = numpy.unique(labels[labels > 0])
-        remap = numpy.zeros(size + 2, dtype=numpy.int64)
-        remap[unique] = numpy.arange(1, len(unique) + 1)
-        return remap[labels], len(unique)
+def _count_regions(mask: numpy.ndarray) -> Tuple[int, int]:
+    """Count 4-connected regions of True cells: (all regions, regions touching the grid border).
+
+    Works on horizontal runs per row with a small union-find, so it stays fast in
+    plain Python (Cura's bundled Python has no scipy.ndimage).
+    """
+    rows, columns = mask.shape
+    padded = numpy.zeros((rows, columns + 2), dtype=numpy.int8)
+    padded[:, 1:-1] = mask
+    changes = numpy.diff(padded, axis=1)
+    run_rows, run_starts = numpy.nonzero(changes == 1)
+    _, run_ends = numpy.nonzero(changes == -1)  # exclusive end; same order as starts
+    count = len(run_starts)
+    if count == 0:
+        return 0, 0
+    parent = list(range(count))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    row_first = numpy.searchsorted(run_rows, numpy.arange(rows + 1))
+    for row in range(1, rows):
+        a0, a1 = row_first[row - 1], row_first[row]
+        b0, b1 = row_first[row], row_first[row + 1]
+        i, j = a0, b0
+        while i < a1 and j < b1:
+            if run_starts[i] < run_ends[j] and run_starts[j] < run_ends[i]:
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[ri] = rj
+            if run_ends[i] < run_ends[j]:
+                i += 1
+            else:
+                j += 1
+    roots = [find(i) for i in range(count)]
+    border = (run_rows == 0) | (run_rows == rows - 1) | (run_starts == 0) | (run_ends == columns)
+    border_roots = {roots[i] for i in numpy.nonzero(border)[0]}
+    return len(set(roots)), len(border_roots)
 
 
 def _cut(vertices: numpy.ndarray, faces: numpy.ndarray, normals: numpy.ndarray, up: int, height: float):
@@ -181,10 +200,9 @@ def _cut(vertices: numpy.ndarray, faces: numpy.ndarray, normals: numpy.ndarray, 
         numpy.add.at(winding, (row, column), sign[seg_index])
     filled = numpy.cumsum(winding, axis=1)[:, :columns] != 0
 
-    _, parts = _label(filled)
-    empty_labels, empty_count = _label(~filled)
-    border = numpy.unique(numpy.concatenate([empty_labels[0], empty_labels[-1], empty_labels[:, 0], empty_labels[:, -1]]))
-    holes = empty_count - len(border[border > 0])
+    parts, _ = _count_regions(filled)
+    empty_count, empty_on_border = _count_regions(~filled)
+    holes = empty_count - empty_on_border
     area = float(numpy.count_nonzero(filled)) * resolution * resolution
     return parts, holes, area, open_fraction
 

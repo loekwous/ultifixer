@@ -23,7 +23,7 @@ sleep het op het Cura-venster en start Cura opnieuw. De handleiding (PDF) staat 
 ## Ontwikkelen
 
 ```bash
-python -m pip install numpy scipy pytest
+python -m pip install numpy pytest
 python tests/fixtures/make_fixtures.py
 python -m pytest tests/unit
 python scripts/build_package.py
