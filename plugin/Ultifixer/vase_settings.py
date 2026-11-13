@@ -13,6 +13,8 @@ from .project_settings import VaseSourceSettings
 
 DEFAULT_BOTTOM_MM = 1.0
 MAX_WIDTH_FACTOR = 1.5  # a 0.4 mm nozzle prints walls up to 0.6 mm wide
+MERGE_OFFSET_MM = 0.05
+MIN_OUTLINE_MM = 20.0
 
 
 @dataclass
@@ -47,6 +49,8 @@ def make_plan(source: Optional[VaseSourceSettings], nozzle_size: float) -> VaseP
         global_settings={
             "magic_spiralize": True,
             "smooth_spiralized_contours": smooth,
+            # Drop tiny leftover outlines; in vase mode only the big outer outline matters.
+            "minimum_polygon_circumference": MIN_OUTLINE_MM,
         },
         extruder_settings={
             "wall_line_width_0": wall_width,
@@ -54,6 +58,10 @@ def make_plan(source: Optional[VaseSourceSettings], nozzle_size: float) -> VaseP
             "infill_sparse_density": 0,
             "top_thickness": 0,
             "bottom_thickness": bottom,
+            # MakerWorld "Make My Vase" models are a core plus many rib bodies that almost touch.
+            # Without a tiny outward offset Cura keeps the rib tips as separate islands and, in
+            # vase mode, draws lines straight through the vase to reach them.
+            "xy_offset": MERGE_OFFSET_MM,
         },
         wall_width=wall_width,
         bottom_thickness=bottom,
