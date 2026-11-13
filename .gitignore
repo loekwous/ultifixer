@@ -1,0 +1,10 @@
+dist/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+e2e-out/
+tests/fixtures/generated/
+tests/fixtures/private/
+.cache/
+*.AppImage
