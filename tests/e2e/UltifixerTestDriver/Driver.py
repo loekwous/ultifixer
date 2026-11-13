@@ -201,10 +201,17 @@ class Driver(QObject, Extension):
                                                        "events": fixer.events[first_event:] if fixer else []})
 
             if scenario.get("slice"):
-                self._backend_state = None
-                backend.forceSlice()
-                yield self._wait(lambda: self._backend_state in (3, 4), 300, "slice " + scenario["name"])
+                for attempt in range(3):
+                    # A stale "error" from the previous engine being stopped can arrive first; retry.
+                    yield self._wait(lambda: True, 2, "engine idle")
+                    self._backend_state = None
+                    backend.forceSlice()
+                    yield self._wait(lambda: self._backend_state in (3, 4), 300, "slice " + scenario["name"])
+                    if self._backend_state == 3:
+                        break
+                    Logger.log("w", "UltifixerTestDriver: slice attempt %d ended in state %s", attempt + 1, self._backend_state)
                 result["backend_state"] = self._backend_state
+                result["slice_attempts"] = attempt + 1
                 if self._backend_state == 3:
                     gcode_path = os.path.join(self._out, scenario["name"] + ".gcode")
                     writer = registry.getPluginObject("GCodeWriter")
