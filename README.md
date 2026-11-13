@@ -13,7 +13,7 @@ een vol blok. Ultifixer herkent zo'n vaas bij het openen en zet Cura's eigen vaa
 - Melding met **Ongedaan maken** en **Niet meer automatisch**. Vaas van het bed gehaald? Dan gaan de gewone
   instellingen vanzelf terug.
 
-Getest met UltiMaker Cura 5.12 en 5.13 (Linux, end-to-end in GitHub Actions).
+Getest met UltiMaker Cura 5.12, 5.13 en 5.14 (end-to-end in GitHub Actions, elke maandag opnieuw tegen de nieuwste Cura).
 
 ## Installeren
 
