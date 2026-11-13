@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Every Monday 05:00 UTC: also catches a new Cura release that breaks the plugin.
+    # GitHub e-mails the repository owner when a scheduled run fails.
+    - cron: "0 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests + package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install numpy scipy pytest
+      - run: python tests/fixtures/make_fixtures.py
+      - run: python -m pytest tests/unit -v
+      - name: Build package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then VERSION="$(python -c 'import json;print(json.load(open("plugin/Ultifixer/plugin.json"))["version"])')"; fi
+          python scripts/build_package.py "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: dist/*.curapackage
+
+  cura-versions:
+    name: Pick Cura versions
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LATEST=$(gh api repos/Ultimaker/Cura/releases/latest --jq .tag_name)
+          echo "Latest Cura release: $LATEST"
+          MATRIX=$(python3 -c "import json,sys; v=['5.12.1','5.13.0']; l=sys.argv[1]; v += [l] if l not in v else []; print(json.dumps(v))" "$LATEST")
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: Cura ${{ matrix.cura }} end-to-end
+    needs: [unit, cura-versions]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        cura: ${{ fromJson(needs.cura-versions.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: dist
+      - name: Install Xvfb and libraries Cura needs
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            xvfb xauth libgl1 libegl1 libglx-mesa0 libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxcb-xkb1 libxcb-cursor0 libfontconfig1 libdbus-1-3 libxrender1 libxi6 libsm6 libice6 \
+            libglib2.0-0 libnss3 libxcomposite1 libxdamage1 libxtst6 libasound2t64 libxkbfile1 python3-numpy
+      - uses: actions/cache@v4
+        with:
+          path: cura.AppImage
+          key: cura-appimage-${{ matrix.cura }}
+      - name: Download Cura ${{ matrix.cura }}
+        run: |
+          if [ ! -f cura.AppImage ]; then
+            curl -fsSL -o cura.AppImage "https://github.com/Ultimaker/Cura/releases/download/${{ matrix.cura }}/UltiMaker-Cura-${{ matrix.cura }}-linux-X64.AppImage"
+          fi
+          chmod +x cura.AppImage
+          ./cura.AppImage --appimage-extract > /dev/null
+      - run: python3 tests/fixtures/make_fixtures.py
+      - name: Run Ultifixer inside Cura
+        run: python3 tests/e2e/run_e2e.py --cura squashfs-root --package dist/Ultifixer.curapackage --fixtures tests/fixtures/generated --out e2e-out
+      - name: Report
+        if: always()
+        run: cat e2e-out/report.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-cura-${{ matrix.cura }}
+          path: |
+            e2e-out/report.md
+            e2e-out/results-*.json
+            e2e-out/*.log
+            e2e-out/screenshots/
+            e2e-out/cura-home-*/.local/share/cura/*/cura.log
+
+  manual:
+    name: Handleiding (PDF)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: typst-community/setup-typst@v4
+        with:
+          typst-version: "0.13.1"
+      - name: Build PDF
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then VERSION="$(python3 -c 'import json;print(json.load(open("plugin/Ultifixer/plugin.json"))["version"])')"; fi
+          typst compile --font-path docs/fonts --input version="$VERSION" docs/handleiding.typ dist/Ultifixer-handleiding.pdf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manual
+          path: dist/Ultifixer-handleiding.pdf
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [unit, e2e, manual]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          gh release create "$GITHUB_REF_NAME" --title "Ultifixer ${GITHUB_REF_NAME#v}" --notes-file docs/release-notes.md \
+            dist/Ultifixer.curapackage "dist/Ultifixer-${GITHUB_REF_NAME#v}.curapackage" dist/Ultifixer-handleiding.pdf
