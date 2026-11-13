@@ -15,6 +15,7 @@ Exit code 0 when every check passes.
 """
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -85,6 +86,16 @@ def run_cura(cura_dir, home, plan, out, timeout):
             subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
             pass
+    for log_file in glob.glob(os.path.join(home, ".local", "share", "cura", "*", "cura.log")):
+        shutil.copyfile(log_file, os.path.join(out, "cura-%s.log" % plan["mode"]))
+    partial = os.path.join(out, "partial-results.json")
+    if not os.path.exists(results_path) and os.path.exists(partial):
+        shutil.copyfile(partial, results_path)
+        with open(results_path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        data.setdefault("errors", []).append("Cura did not finish in time; results are partial")
+        with open(results_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
     if not os.path.exists(results_path):
         raise SystemExit("Cura produced no results for plan %s; see %s" % (plan["mode"], log_path))
     with open(results_path, encoding="utf-8") as handle:
@@ -162,7 +173,7 @@ def main():
     parser.add_argument("--fixtures", required=True)
     parser.add_argument("--private", default=os.path.join(HERE, "..", "fixtures", "private"))
     parser.add_argument("--out", required=True)
-    parser.add_argument("--timeout", type=int, default=1500)
+    parser.add_argument("--timeout", type=int, default=1200)
     args = parser.parse_args()
 
     cura_dir = os.path.abspath(args.cura)

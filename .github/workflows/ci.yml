@@ -97,10 +97,10 @@ jobs:
           name: e2e-cura-${{ matrix.cura }}
           path: |
             e2e-out/report.md
-            e2e-out/results-*.json
+            e2e-out/*.json
             e2e-out/*.log
+            e2e-out/*.gcode
             e2e-out/screenshots/
-            e2e-out/cura-home-*/.local/share/cura/*/cura.log
 
   manual:
     name: Handleiding (PDF)
@@ -114,6 +114,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then VERSION="$(python3 -c 'import json;print(json.load(open("plugin/Ultifixer/plugin.json"))["version"])')"; fi
+          mkdir -p dist
           typst compile --font-path docs/fonts --input version="$VERSION" docs/handleiding.typ dist/Ultifixer-handleiding.pdf
       - uses: actions/upload-artifact@v4
         with:

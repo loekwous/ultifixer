@@ -88,11 +88,18 @@ class Driver(QObject, Extension):
     def _wait(self, condition, timeout, label):
         return (condition, timeout, label)
 
+    def _save(self, name: str = "results.json") -> None:
+        os.makedirs(self._out, exist_ok=True)
+        with open(os.path.join(self._out, name), "w", encoding="utf-8") as handle:
+            json.dump(self._results, handle, indent=2, default=str)
+
     def _finish(self) -> None:
         self._timer.stop()
-        os.makedirs(self._out, exist_ok=True)
-        with open(os.path.join(self._out, "results.json"), "w", encoding="utf-8") as handle:
-            json.dump(self._results, handle, indent=2, default=str)
+        try:
+            self._app.saveSettings()  # keeps the printer, so the next start skips the welcome wizard
+        except Exception:
+            self._results["errors"].append("saveSettings failed: " + traceback.format_exc())
+        self._save()
         Logger.log("i", "UltifixerTestDriver: done, %d errors", len(self._results["errors"]))
         QTimer.singleShot(500, lambda: os._exit(0))
 
@@ -157,8 +164,10 @@ class Driver(QObject, Extension):
         self._app.getPreferences().setValue("general/auto_slice", False)
 
         for scenario in self._plan.get("scenarios", []):
+            self._save("partial-results.json")
             result = {"name": scenario["name"], "file": scenario.get("file")}
             self._results["scenarios"].append(result)
+            Logger.log("i", "UltifixerTestDriver: scenario %s", scenario["name"])
             fixer = self._ultifixer()
             self._reset()
             yield self._wait(lambda: True, 1, "reset")
@@ -168,8 +177,8 @@ class Driver(QObject, Extension):
 
             path = scenario["file"]
             self._app.readLocalFile(QUrl.fromLocalFile(path), "open_as_model")
-            yield self._wait(lambda: path in self._files_done, 120, "load " + path)
-            yield self._wait(lambda: fixer is None or fixer.busy == 0, 120, "analysis")
+            yield self._wait(lambda: path in self._files_done, 60, "load " + path)
+            yield self._wait(lambda: fixer is None or fixer.busy == 0, 60, "analysis")
             yield self._wait(lambda: True, 1, "settle")
             result["events"] = fixer.events[first_event:] if fixer else []
             result["settings"] = self._settings()
@@ -194,7 +203,7 @@ class Driver(QObject, Extension):
             if scenario.get("slice"):
                 self._backend_state = None
                 backend.forceSlice()
-                yield self._wait(lambda: self._backend_state in (3, 4), 600, "slice " + scenario["name"])
+                yield self._wait(lambda: self._backend_state in (3, 4), 300, "slice " + scenario["name"])
                 result["backend_state"] = self._backend_state
                 if self._backend_state == 3:
                     gcode_path = os.path.join(self._out, scenario["name"] + ".gcode")
