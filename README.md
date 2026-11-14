@@ -18,6 +18,10 @@ een vol blok. Ultifixer herkent zo'n vaas bij het openen en zet Cura's eigen vaa
 
 Getest met UltiMaker Cura 5.12, 5.13 en 5.14 (end-to-end in GitHub Actions, elke maandag opnieuw tegen de nieuwste Cura).
 
+**Bekend:** Bambu *modifier parts* en *support enforcers* laadt Cura niet; daar doet Ultifixer niets mee.
+Past een model op de bedoelde grootte niet op je printer, dan blijft het op de grootte die Cura opende en meldt
+Ultifixer dat.
+
 ## Installeren
 
 Download `Ultifixer.curapackage` van de [laatste release](https://github.com/loekwous/ultifixer/releases/latest),
@@ -35,3 +39,8 @@ python scripts/build_package.py
 End-to-end in een echte Cura (Linux, Xvfb): zie `tests/e2e/run_e2e.py` en `.github/workflows/ci.yml`.
 Lokaal draait dat het snelst in Docker, één container per Cura-versie en altijd met een geheugenlimiet
 (`docker run --memory 4g ...`); `--only <regex>` draait alleen de scenario's die je nodig hebt.
+Zonder limiet kan een op hol geslagen CuraEngine de pc vastzetten. Het testprofiel zet `send_engine_crash = False`:
+met crash-rapportage aan groeit CuraEngine op sommige machines snel tot hij gekild wordt.
+
+Echte MakerWorld-bestanden (niet in git, auteursrecht) horen in `tests/fixtures/private/`; de tests die ze nodig
+hebben slaan zichzelf over als ze ontbreken.

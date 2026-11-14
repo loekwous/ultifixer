@@ -110,7 +110,7 @@ def test_private_makerworld_stl_files():
 
 @pytest.mark.skipif(not os.path.isdir(PRIVATE), reason="private MakerWorld files not present")
 def test_private_makerworld_3mf_files():
-    # Stratos Pillar is a vase-mode 3MF. VASO_CALLE is not: it is hollowed by a Bambu negative part (see HANDOFF.md).
+    # Stratos Pillar is a vase-mode 3MF. VASO_CALLE is not: it is hollowed by a Bambu negative part.
     for name in os.listdir(PRIVATE):
         if name.lower().startswith("stratos") and name.lower().endswith(".3mf"):
             assert read_3mf_settings(os.path.join(PRIVATE, name)).spiral_mode, name
