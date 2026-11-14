@@ -139,3 +139,54 @@ def test_plan_follows_nozzle_size():
 def test_plan_keeps_narrow_source_width():
     source = read_3mf_settings.__globals__["VaseSourceSettings"](outer_wall_width=0.45)
     assert make_plan(source, 0.4).wall_width == 0.45
+
+
+# ------------------------------------------------------------------ Bambu negative parts
+
+def test_negative_part_is_read(fixtures_dir):
+    from Ultifixer.project_settings import read_negative_parts
+    path = os.path.join(fixtures_dir, "bambu_negative_part.3mf")
+    found = read_3mf_settings(path)
+    assert found.spiral_mode is False
+    assert found.parts == {"3": ["normal_part", "negative_part"]}
+    assert found.has_negative_parts
+    shapes = read_negative_parts(path, found)
+    assert list(shapes) == ["3"] and len(shapes["3"].holes) == 1
+    assert shapes["3"].anchor.shape == (3, 3)
+    triangles = shapes["3"].holes[0]
+    assert triangles.shape[1:] == (3, 3)
+    low, high = triangles.reshape(-1, 3).min(axis=0), triangles.reshape(-1, 3).max(axis=0)
+    assert low == pytest.approx([-20, -20, 3], abs=0.01) and high == pytest.approx([20, 20, 85], abs=0.01)
+
+
+def test_files_without_negative_parts(fixtures_dir):
+    from Ultifixer.project_settings import read_negative_parts
+    for name in ("bambu_vase.3mf", "plain_vase.3mf", "prusa_vase.3mf"):
+        path = os.path.join(fixtures_dir, name)
+        found = read_3mf_settings(path)
+        assert not found.has_negative_parts
+        assert read_negative_parts(path, found) == {}
+
+
+def test_part_settings():
+    from Ultifixer.vase_settings import part_settings
+    assert part_settings("normal_part") is None
+    hole = part_settings("negative_part")
+    assert hole["cutting_mesh"] is True and hole["wall_line_count"] == 0 and hole["infill_sparse_density"] == 0
+    assert part_settings("support_blocker") == {"anti_overhang_mesh": True}
+    assert part_settings("modifier_part")["infill_mesh"] is True
+
+
+def test_gap_ribs_is_a_vase(fixtures_dir):
+    path = os.path.join(fixtures_dir, "gap_ribs.stl")
+    assert analyse_mesh(read_stl(path), None, up=2, file_name=path).looks_like_vase
+
+
+@pytest.mark.skipif(not os.path.exists(os.path.join(PRIVATE, "VASO_CALLE.3mf")), reason="private file not present")
+def test_private_calla_vase_has_a_negative_part():
+    from Ultifixer.project_settings import read_negative_parts
+    path = os.path.join(PRIVATE, "VASO_CALLE.3mf")
+    found = read_3mf_settings(path)
+    assert found.has_negative_parts and not found.spiral_mode
+    shapes = read_negative_parts(path, found)
+    assert sum(len(v.holes) for v in shapes.values()) == 1

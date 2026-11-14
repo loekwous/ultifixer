@@ -9,7 +9,7 @@ No Cura imports, so this is testable on its own.
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-from .project_settings import VaseSourceSettings
+from .project_settings import NEGATIVE_PART, NORMAL_PART, VaseSourceSettings
 
 DEFAULT_BOTTOM_MM = 1.0
 MAX_WIDTH_FACTOR = 1.5  # a 0.4 mm nozzle prints walls up to 0.6 mm wide
@@ -66,3 +66,27 @@ def make_plan(source: Optional[VaseSourceSettings], nozzle_size: float) -> VaseP
         wall_width=wall_width,
         bottom_thickness=bottom,
     )
+
+
+# A part that prints nothing itself: no walls, no top or bottom, no infill.
+_EMPTY = {"wall_line_count": 0, "top_layers": 0, "bottom_layers": 0, "initial_bottom_layers": 0}
+
+
+def part_settings(kind: str) -> Optional[Dict[str, object]]:
+    """Per-object Cura settings for one part of a Bambu object; None for a plain printed part.
+
+    Cura loads every part as ordinary plastic. These settings give the part its Bambu meaning:
+
+    * negative part: a "cutting mesh" that prints nothing. Cura removes its volume from the
+      model and puts a wall around the hole, which is what Bambu Studio does.
+    * support blocker: Cura's own support blocker.
+    * modifier and support enforcer: Cura has no equal, so they only stop being printed
+      (an "infill mesh" that changes nothing).
+    """
+    if kind == NORMAL_PART:
+        return None
+    if kind == NEGATIVE_PART:
+        return dict(_EMPTY, cutting_mesh=True, infill_sparse_density=0)
+    if kind == "support_blocker":
+        return {"anti_overhang_mesh": True}
+    return dict(_EMPTY, infill_mesh=True)

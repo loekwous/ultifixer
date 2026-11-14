@@ -68,6 +68,12 @@ def box(center, size):
     return vertices, faces
 
 
+def rotate_z(mesh, angle):
+    vertices, faces = mesh
+    c, s = math.cos(angle), math.sin(angle)
+    return vertices @ numpy.array([[c, s, 0], [-s, c, 0], [0, 0, 1]]), faces
+
+
 def signed_volume(vertices, faces):
     a, b, c = (vertices[faces[:, i]] for i in range(3))
     return float(numpy.einsum("ij,ij->i", a, numpy.cross(b, c)).sum() / 6.0)
@@ -134,10 +140,72 @@ def write_3mf(path, vertices, faces, slicer_config=None, prusa_config=None):
             archive.writestr("Metadata/Slic3r_PE.config", "\n".join("; %s = %s" % kv for kv in prusa_config.items()))
 
 
+def _mesh_xml(vertices, faces):
+    return ("<mesh><vertices>%s</vertices><triangles>%s</triangles></mesh>" % (
+        "".join('<vertex x="%.5f" y="%.5f" z="%.5f"/>' % tuple(v) for v in vertices),
+        "".join('<triangle v1="%d" v2="%d" v3="%d"/>' % tuple(f) for f in faces)))
+
+
+def write_bambu_parts_3mf(path, parts, slicer_config):
+    """A Bambu Studio style 3MF: one object made of parts, the meshes in a separate model file.
+
+    ``parts`` is a list of (subtype, (vertices, faces), transform); the transform is the 3MF
+    text for the part's own scale and shift inside the object. Bambu subtypes are "normal_part",
+    "negative_part", "modifier_part", "support_blocker" and "support_enforcer".
+    """
+    ns = ('xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
+          'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" requiredextensions="p"')
+    objects = "".join('<object id="%d" type="%s">%s</object>' % (
+        index + 1, "model" if kind == "normal_part" else "other", _mesh_xml(*mesh))
+        for index, (kind, mesh, _transform) in enumerate(parts))
+    sub_model = ('<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" %s>'
+                 '<resources>%s</resources></model>' % (ns, objects))
+    object_id = len(parts) + 1
+    components = "".join('<component p:path="/3D/Objects/object_1.model" objectid="%d" transform="%s"/>'
+                         % (index + 1, transform) for index, (_kind, _mesh, transform) in enumerate(parts))
+    model = ('<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xml:lang="en-US" %s>'
+             '<metadata name="Application">BambuStudio-02.07.01.62</metadata>'
+             '<resources><object id="%d" type="model"><components>%s</components></object></resources>'
+             '<build><item objectid="%d" transform="1 0 0 0 1 0 0 0 1 128 128 0" printable="1"/></build></model>'
+             % (ns, object_id, components, object_id))
+    settings = ('<?xml version="1.0" encoding="UTF-8"?>\n<config><object id="%d"><metadata key="name" value="Assembly"/>%s</object></config>'
+                % (object_id, "".join('<part id="%d" subtype="%s"><metadata key="name" value="Part %d"/></part>'
+                                      % (index + 1, kind, index + 1) for index, (kind, _mesh, _transform) in enumerate(parts))))
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml",
+                         '<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                         '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                         '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>')
+        archive.writestr("_rels/.rels",
+                         '<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                         '<Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>')
+        archive.writestr("3D/_rels/3dmodel.model.rels",
+                         '<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                         '<Relationship Target="/3D/Objects/object_1.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>')
+        archive.writestr("3D/3dmodel.model", model)
+        archive.writestr("3D/Objects/object_1.model", sub_model)
+        archive.writestr("Metadata/project_settings.config", json.dumps(slicer_config, indent=4))
+        archive.writestr("Metadata/model_settings.config", settings)
+
+
+GAP_MM = 0.002  # MakerWorld "Make My Vase" ribs miss the core by about this much
+
+
+def gap_ribs():
+    """A core with ribs that just do not touch it. Unfixed, Cura prints every rib as a loose island."""
+    segments = 64
+    core = revolve([(0, 0)] + [(30, 100 * k / 40) for k in range(41)] + [(0, 100)], segments=segments)
+    flat = 30 * math.cos(math.pi / segments)  # distance from the axis to the middle of a flat side
+    ribs = [rotate_z(box((flat + GAP_MM + 2, 0, 50), (4, 2.4, 100)), 2 * math.pi * (i + 0.5) / segments)
+            for i in range(0, segments, 4)]
+    return merge(core, *ribs)
+
+
 BAMBU_VASE = {"spiral_mode": "1", "spiral_mode_smooth": "1", "outer_wall_line_width": "1", "line_width": "0.42",
               "bottom_shell_layers": "5", "top_shell_layers": "0", "sparse_infill_density": "0%",
               "layer_height": "0.2", "wall_loops": "1", "printer_model": "Bambu Lab A1",
               "nozzle_diameter": ["0.4"]}
+HOLE_RADIUS = 20.0
 BAMBU_NORMAL = dict(BAMBU_VASE, spiral_mode="0", top_shell_layers="5", sparse_infill_density="15%")
 
 
@@ -154,9 +222,14 @@ def build(out_dir):
     simple_cylinder = revolve([(0, 0), (30, 0), (30, 80), (0, 80)], segments=24)
     cube = box((0, 0, 20), (40, 40, 40))
 
+    # Half size and unshifted: like Bambu Studio, the 3MF scales and shifts the parts into place.
+    solid_pot = revolve([(0, 0), (15, 0), (15, 40), (0, 40)], segments=96)
+    pot_hole = revolve([(0, 0), (HOLE_RADIUS, 0), (HOLE_RADIUS, 82), (0, 82)], segments=96)
+
     files = {
         "model_a.stl": ribbed_vase,             # solid vase, neutral name: found by shape
         "ribbed_pillar.stl": multi_body,        # core + overlapping rib bodies (like MakerWorld "Make My Vase")
+        "gap_ribs.stl": gap_ribs(),             # core + rib bodies that miss it by 0.002 mm
         "hollow_cup.stl": cup,                  # already hollow: must stay untouched
         "ball.stl": ball,                       # solid but closed top: not a vase
         "block.stl": cube,                      # simple box: not a vase without a name hint
@@ -171,6 +244,10 @@ def build(out_dir):
     write_3mf(os.path.join(out_dir, "prusa_vase.3mf"), *simple_cylinder,
               prusa_config={"spiral_vase": "1", "external_perimeter_extrusion_width": "0.6",
                             "bottom_solid_layers": "4", "layer_height": "0.2"})
+    # A solid pot that Bambu Studio hollows with a "negative part" (not vase mode).
+    write_bambu_parts_3mf(os.path.join(out_dir, "bambu_negative_part.3mf"),
+                          [("normal_part", solid_pot, "2 0 0 0 2 0 0 0 2 0 0 0"),
+                           ("negative_part", pot_hole, "1 0 0 0 1 0 0 0 1 0 0 3")], BAMBU_NORMAL)
     return sorted(os.listdir(out_dir))
 
 

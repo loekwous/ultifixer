@@ -10,6 +10,9 @@ een vol blok. Ultifixer herkent zo'n vaas bij het openen en zet Cura's eigen vaa
 - **3MF** van Bambu Studio, OrcaSlicer of PrusaSlicer met vaasmodus: altijd herkend.
 - **STL** (en 3MF zonder slicer-instellingen): herkend aan de vorm (dicht, één omtrek op elke hoogte,
   vlakke bodem, open rand). Lukt dat niet: *Extensies › Ultifixer › Maak er een vaas van*.
+- **Bambu-3MF met een uitsparing** (*negative part*, bijvoorbeeld het gat van een vaas die met wanden en
+  vulling geprint wordt): Cura laat die uitsparing weg en print een massief blok. Ultifixer zet hem terug als gat,
+  zet het model op de bedoelde grootte (als dat op je printer past) en midden op het bed.
 - Melding met **Ongedaan maken** en **Niet meer automatisch**. Vaas van het bed gehaald? Dan gaan de gewone
   instellingen vanzelf terug.
 
@@ -30,3 +33,5 @@ python scripts/build_package.py
 ```
 
 End-to-end in een echte Cura (Linux, Xvfb): zie `tests/e2e/run_e2e.py` en `.github/workflows/ci.yml`.
+Lokaal draait dat het snelst in Docker, één container per Cura-versie en altijd met een geheugenlimiet
+(`docker run --memory 4g ...`); `--only <regex>` draait alleen de scenario's die je nodig hebt.

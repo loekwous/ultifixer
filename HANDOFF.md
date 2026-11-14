@@ -1,42 +1,27 @@
-# Overdracht (werk in uitvoering)
+# Overdracht
 
-Stand op 2026-11-13, voor een nieuwe Claude Code-sessie op een machine met meer geheugen.
+Stand op 2026-11-14.
 
-## Klaar
-- Plugin v0.1.0 gereleased; CI (unit + echte Cura 5.12.1 / 5.13.0 / nieuwste, wekelijks op maandag) groen.
-- **Nieuw, nog niet in een release:** fix voor MakerWorld "Make My Vase"-modellen (kern + tientallen rib-lichamen
-  die net niet raken, bv. Stratos Pillar). Cura hield de rib-uiteinden als losse eilandjes en trok in vaasmodus
-  extrusielijnen dwars door de vaas (tot 122 mm). Fix in `plugin/Ultifixer/vase_settings.py`:
-  `xy_offset = 0.05` (per extruder) en `minimum_polygon_circumference = 20` (globaal).
-  Gemeten met CuraEngine 5.13 op de echte Stratos: 569 → 4 lagen met sprongen, langste lijn 122 → 3,6 mm,
-  filament 92 → 40 cm³. V_za ongewijzigd.
-- `tests/e2e/gcode_check.py` is strenger: per laag één aaneengesloten extrusie en geen extrusie > 15 mm.
-
-## Nog te doen
-1. **Testmodel met microspleten** toevoegen aan `tests/fixtures/make_fixtures.py` (ribben die de kern op ~0,002 mm
-   missen) en in `tests/e2e/run_e2e.py` slicen, zodat CI dit probleem vangt. Het huidige `ribbed_pillar.stl`
-   overlapt te ruim en reproduceert het niet.
-2. **Bambu "negative parts"** (VASO_CALLE.3mf): dicht vaasblok + cilinder met `subtype="negative_part"` in
-   `Metadata/model_settings.config`. Bambu snijdt die weg en print normaal (spiral_mode 0, 2 wanden, 10% infill).
-   Cura laadt de cilinder als gewoon mesh → vaas massief. Plan: in de plugin bij een Bambu-3MF de parts met
-   `negative_part` mappen op de child-nodes van de groep (volgorde van `<component>` in 3D/3dmodel.model) en
-   per-object instellen: `cutting_mesh=True`, `wall_line_count=0`, `infill_sparse_density=0`, `top_layers=0`,
-   `bottom_layers=0`, `initial_bottom_layers=0`.
-   **Al geverifieerd met CuraEngine 5.13 CLI** (vaas + cilinder als tweede mesh met bovenstaande instellingen,
-   `center_object=false`, 2 wanden, 10% infill): van z=32 tot z≈176 mm ligt de dichtstbijzijnde extrusie overal op
-   40,1 mm van het midden (cilinderstraal 40) → het gat werkt, met binnenwand. Open punt: vanaf z≈190 mm staat er nog
-   materiaal binnen r<40 (max r 47,7 op z=192; 37,9 op z=200). Uitzoeken: klopt mijn transformatie van de cilinder
-   (component-transform in 3D/3dmodel.model: z-schaal 1.0099, +30.77; model_settings noemt z-schaal 1.0199, +61.85),
-   en vergelijk met een Bambu Studio-slice. Let op: `center_object` in CuraEngine centreert per mesh en verschuift
-   dan de cilinder — in Cura zelf blijft de groepstransformatie behouden, dus daar speelt dat niet.
-   Modifier/support-parts (`modifier_part`, `support_blocker`,
-   `support_enforcer`) niet laten printen (bv. `anti_overhang_mesh=True`). Eerst met CuraEngine verifiëren dat de
-   cutting mesh echt een leeg gat met binnenwand geeft, daarna e2e-fixture (Bambu-3MF met negatieve cilinder) en
-   check "geen extrusie binnen de gatstraal".
-3. Daarna CI groen → tag `v0.2.0` (release-job publiceert pakket + handleiding).
+## Klaar in v0.2.0
+- "Make My Vase"-modellen (kern + ribben die net niet raken): `xy_offset = 0.05`, `minimum_polygon_circumference = 20`.
+  Testmodel `gap_ribs.stl` (ribben op 0,002 mm van de kern) faalt zonder die instellingen en slaagt ermee.
+- Bambu *negative parts* (VASO_CALLE.3mf, de Calla Lily-vaas van MakerWorld). Cura's 3MF-lezer laat zo'n part
+  helemaal weg en negeert de schaal per part. De plugin leest het part zelf uit de 3MF, zet het als
+  `cutting_mesh` zonder wanden/vulling in een groep met het model, zet de schaal terug als het model dan nog past,
+  en zet een model dat over de bedrand hangt in het midden (Cura t/m 5.13 doet dat niet zelf).
+  Testmodel `bambu_negative_part.3mf`; de e2e controleert dat er geen plastic in het gat komt.
 
 ## Lokaal testen
-- Echte bestanden (niet in git, auteursrecht): `tests/fixtures/private/` (V_za.stl, Stratos_Pillar_S.3mf,
-  VASO_CALLE.3mf).
-- Hulpscripts voor CuraEngine-only slicen en G-code-analyse staan niet in de repo; `tests/e2e/run_e2e.py` draait de
-  volledige Cura (Linux AppImage onder Xvfb), zie `.github/workflows/ci.yml` voor de benodigde pakketten.
+- Echte bestanden (niet in git, auteursrecht): `tests/fixtures/private/` (ook op `loek@embedded-nuc`, zelfde pad).
+- Altijd in Docker met `--memory`: zonder limiet kan een op hol geslagen CuraEngine de pc vastzetten.
+- `send_engine_crash = False` in het testprofiel is nodig: met crash-rapportage (Sentry) aan groeit CuraEngine op
+  sommige machines ~1 GB/s en wordt hij gekild (-9). Staat in `tests/e2e/run_e2e.py`.
+
+## Bekend
+- Open punt uit de vorige overdracht (materiaal binnen r<40 mm boven z≈190 bij VASO_CALLE) is verklaard: het
+  negative part is geen zuivere cilinder maar loopt bovenaan taps toe (r 40 → 35 → punt), dus het gat wordt daar
+  smaller. De transform uit `3D/3dmodel.model` (z-schaal 1.0099, +30.77) is de juiste; de `matrix` in
+  `model_settings.config` wordt niet gebruikt.
+- VASO_CALLE is op ware grootte 200,0 mm hoog en past dus net niet op een Ultimaker S3 (200 mm); de plugin laat
+  hem dan op de grootte die Cura opende en meldt dat.
+- Bambu *modifier parts* en *support enforcers* laadt Cura ook niet; daar doet de plugin niets mee.

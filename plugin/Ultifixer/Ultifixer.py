@@ -15,8 +15,8 @@ from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator
 
 from cura.CuraApplication import CuraApplication
 
-from .project_settings import VaseSourceSettings, read_3mf_settings
-from .vase_settings import VasePlan, make_plan
+from .project_settings import VaseSourceSettings, read_3mf_settings, read_negative_parts
+from .vase_settings import VasePlan, _nl, make_plan, part_settings
 from .vase_shape import ShapeReport, analyse_mesh
 
 PREF_AUTO = "ultifixer/auto_detect"
@@ -85,6 +85,9 @@ class Ultifixer(QObject, Extension):
         self._nodes_before: Dict[str, set] = {}
         self._vase_nodes: List[object] = []
         self._saved_values: List[Tuple[object, str, object]] = []
+        self._saved_parts: List[Tuple[object, str, object]] = []  # per-object settings of Bambu parts
+        self._hole_nodes: List[object] = []  # cutting meshes this plugin added
+        self._size_note = ""
         self._message: Optional[Message] = None
         self._jobs: Dict[_AnalyseJob, str] = {}
         self.busy = 0  # number of files still being analysed (used by the tests)
@@ -137,13 +140,24 @@ class Ultifixer(QObject, Extension):
         if file_name.lower().endswith(".3mf"):
             source = read_3mf_settings(file_name)
             if source.slicer:
+                self._size_note = ""
+                holes = self._applyParts(new_nodes, source, os.path.basename(file_name))
+                if source.has_negative_parts and not holes:
+                    try:
+                        holes = self._addHoles(new_nodes, source, file_name)
+                    except Exception:  # never let a weird file break Cura
+                        Logger.logException("w", "Ultifixer: could not add the holes of %s", file_name)
+                self._keepOnPlate(new_nodes, os.path.basename(file_name))
                 if source.spiral_mode:
                     self._apply(new_nodes, source, os.path.basename(file_name),
                                 "het bestand zegt: vaasmodus (%s)" % ("Bambu Studio" if source.slicer == "bambu" else "PrusaSlicer"),
                                 automatic=True)
                 else:
                     self._record("not_vase", file=os.path.basename(file_name), reason="3MF has vase mode off")
-                    self._warnIfMixed(new_nodes)
+                    if holes:
+                        self._showHoles(os.path.basename(file_name))
+                    else:
+                        self._warnIfMixed(new_nodes)
                 return
 
         # No slicer settings: look at the shape.
@@ -250,8 +264,9 @@ class Ultifixer(QObject, Extension):
             self._saved_values.append((container, key, previous))
         container.setProperty(key, "value", value)
 
-    def _restore(self) -> None:
-        for container, key, previous in reversed(self._saved_values):
+    @staticmethod
+    def _putBack(saved) -> None:
+        for container, key, previous in reversed(saved):
             try:
                 if previous is _MISSING:
                     container.removeInstance(key)
@@ -259,7 +274,239 @@ class Ultifixer(QObject, Extension):
                     container.setProperty(key, "value", previous)
             except Exception:
                 Logger.logException("w", "Ultifixer: could not restore %s", key)
+
+    def _restore(self) -> None:
+        self._putBack(self._saved_values)
         self._saved_values = []
+
+    # ------------------------------------------------- Bambu parts (holes)
+
+    def _applyParts(self, new_nodes, source: VaseSourceSettings, name: str) -> int:
+        """Give the parts of a Bambu object their meaning in Cura. Returns the number of holes made.
+
+        Cura loads a Bambu object with several parts as a group, one child per part in file
+        order, and prints every child as plastic. A "negative part" then fills the hole it
+        was meant to cut.
+        """
+        if not source.parts:
+            return 0
+        groups = []
+        for node in new_nodes:
+            parent = node.getParent()
+            if parent is not None and parent.callDecoration("isGroup") and all(parent is not g for g in groups):
+                groups.append(parent)
+        holes = 0
+        for object_id, kinds in source.parts.items():
+            matches = [g for g in groups if str(g.getId()) == object_id and len(g.getChildren()) == len(kinds)]
+            if not matches and len(source.parts) == 1:
+                matches = [g for g in groups if len(g.getChildren()) == len(kinds)]
+            if len(matches) != 1:
+                continue  # the usual case: Cura left the special parts out, see _addHoles
+            for child, kind in zip(matches[0].getChildren(), kinds):
+                settings = part_settings(kind)
+                if settings is None:
+                    continue
+                try:
+                    self._setOnNode(child, settings)
+                except Exception:
+                    Logger.logException("w", "Ultifixer: could not set up part %s of %s", kind, name)
+                    continue
+                holes += kind == "negative_part"
+            self._record("parts", file=name, object=object_id, kinds=kinds)
+        return holes
+
+    def _addHoles(self, new_nodes, source: VaseSourceSettings, file_name: str) -> int:
+        """Add the negative parts that Cura's 3MF reader left out, as meshes that cut a hole.
+
+        Cura loads only the printed parts of a Bambu object, as one mesh. A negative part gets
+        the same coordinates and the same place in the scene, and is then grouped with the
+        model so that the two move together.
+        """
+        from UM.Math.Matrix import Matrix
+        from UM.Mesh.MeshBuilder import MeshBuilder
+        from UM.Operations.GroupedOperation import GroupedOperation
+        from cura.Operations.SetParentOperation import SetParentOperation
+        from UM.Scene.GroupDecorator import GroupDecorator
+        from cura.Scene.BuildPlateDecorator import BuildPlateDecorator
+        from cura.Scene.ConvexHullDecorator import ConvexHullDecorator
+        from cura.Scene.CuraSceneNode import CuraSceneNode
+        from cura.Scene.SliceableObjectDecorator import SliceableObjectDecorator
+
+        name = os.path.basename(file_name)
+        found = read_negative_parts(file_name, source)
+        made = 0
+        for object_id, parts in found.items():
+            models = [n for n in new_nodes if str(n.getId()) == object_id and n.getMeshData() is not None]
+            if not models and len(found) == 1 and len(new_nodes) == 1 and new_nodes[0].getMeshData() is not None:
+                models = list(new_nodes)
+            if len(models) != 1:
+                self._record("parts_skipped", file=name, object=object_id, reason="model not found in Cura")
+                continue
+            model = models[0]
+
+            # Cura moved the mesh so that its middle is at zero. The same triangle in the file
+            # and in Cura tells how far; all three corners must agree, or the meshes differ.
+            mesh = model.getMeshData()
+            cura_corners = numpy.asarray(mesh.getVertices(), dtype=numpy.float64)
+            cura_corners = cura_corners[numpy.asarray(mesh.getIndices())[0]] if mesh.getIndices() is not None else cura_corners[:3]
+            rotation, offset = parts.anchor_matrix[:3], parts.anchor_matrix[3]
+            to_local = None
+            for baked in (False, True):  # did Cura put the part's own transform into the mesh?
+                anchor = parts.anchor @ rotation + offset if baked else parts.anchor
+                shift = anchor - cura_corners
+                if numpy.abs(shift - shift[0]).max() < 0.01:
+                    if baked:
+                        to_local = lambda points, shift=shift: points - shift[0]
+                    else:
+                        inverse = numpy.linalg.inv(rotation)
+                        to_local = lambda points, shift=shift, inverse=inverse: (points - offset) @ inverse - shift[0]
+                    break
+            if to_local is None:
+                self._record("parts_skipped", file=name, object=object_id, reason="mesh in Cura differs from the file")
+                continue
+
+            build_plate = model.callDecoration("getBuildPlateNumber") or 0
+            holes = []
+            for triangles in parts.holes:
+                builder = MeshBuilder()
+                builder.setVertices(numpy.asarray(to_local(triangles.reshape(-1, 3)), dtype=numpy.float32))
+                builder.calculateNormals(fast=True)
+                hole = CuraSceneNode()
+                hole.setName("Uitsparing")
+                hole.setMeshData(builder.build())
+                hole.setSelectable(True)
+                hole.addDecorator(BuildPlateDecorator(build_plate))
+                hole.addDecorator(ConvexHullDecorator())
+                hole.addDecorator(SliceableObjectDecorator())
+                hole.setTransformation(Matrix(model.getWorldTransformation(copy=True).getData()))
+                hole.setParent(model.getParent())
+                saved = len(self._saved_parts)
+                self._setOnNode(hole, part_settings("negative_part"))
+                del self._saved_parts[saved:]  # undo removes the whole node instead
+                holes.append(hole)
+
+            # Group the model with its holes, as Cura's own "Group models" does.
+            group = CuraSceneNode()
+            group.setName(model.getName())
+            group.addDecorator(GroupDecorator())
+            group.addDecorator(ConvexHullDecorator())
+            group.addDecorator(BuildPlateDecorator(build_plate))
+            group.setParent(model.getParent())
+            group.setSelectable(True)
+            center = model.getWorldPosition()
+            group.setPosition(center)
+            group.setCenterPosition(center)
+            operation = GroupedOperation()
+            for node in [model] + holes:
+                operation.addOperation(SetParentOperation(node, group))
+            operation.push()
+
+            self._hole_nodes.extend(holes)
+            made += len(holes)
+            factor, resized = self._restoreSize(group, model, rotation)
+            self._record("holes", file=name, object=object_id, count=len(holes), scale=factor, resized=resized)
+            if factor != 1.0:
+                self._size_note = ("Het model staat nu ook op de bedoelde grootte (%s× zo groot als Cura het opende)."
+                                   if resized else
+                                   "Let op: het model is %s× zo klein als bedoeld; op ware grootte past het niet op deze printer."
+                                   ) % _nl(factor)
+        return made
+
+    def _keepOnPlate(self, new_nodes, name: str) -> None:
+        """Move a model that hangs over the edge of the plate to the middle.
+
+        A 3MF from another slicer keeps its place on that printer's plate. On a smaller plate
+        Cura (up to 5.13) then puts a large model partly outside, and refuses to slice it.
+        """
+        from UM.Math.Vector import Vector
+        from UM.Scene.SceneNode import SceneNode
+        stack = self._app.getGlobalContainerStack()
+        tops = []
+        for node in new_nodes:
+            parent = node.getParent()
+            top = parent if parent is not None and parent.callDecoration("isGroup") else node
+            if all(top is not t for t in tops):
+                tops.append(top)
+        if stack is None or len(tops) != 1:
+            return
+        box = tops[0].getBoundingBox()
+        if box is None:
+            return
+        width = float(stack.getProperty("machine_width", "value"))
+        depth = float(stack.getProperty("machine_depth", "value"))
+        outside = box.left < -width / 2 or box.right > width / 2 or box.back < -depth / 2 or box.front > depth / 2
+        if not outside or box.width > width or box.depth > depth:
+            return
+        tops[0].translate(Vector(-box.center.x, 0, -box.center.z), SceneNode.TransformSpace.World)
+        self._record("centered", file=name)
+
+    def _restoreSize(self, group, model, rotation) -> Tuple[float, bool]:
+        """Bambu Studio stores a scale per part, which Cura ignores: the model opens too small or too big.
+
+        Returns (factor, applied). Only a plain, equal scale in all directions is put back, and
+        only when the model then still fits the printer.
+        """
+        from UM.Math.Vector import Vector
+        from UM.Scene.SceneNode import SceneNode
+        factor = float(rotation[0, 0])
+        if factor <= 0 or abs(factor - 1.0) < 1e-3 or numpy.abs(rotation - numpy.eye(3) * factor).max() > 1e-4 * factor:
+            return 1.0, False
+        factor = round(factor, 4)
+        box = model.getBoundingBox()
+        stack = self._app.getGlobalContainerStack()
+        if box is None or stack is None:
+            return factor, False
+        room = [float(stack.getProperty(key, "value")) for key in ("machine_width", "machine_height", "machine_depth")]
+        if any(size * factor > limit - 0.5 for size, limit in zip((box.width, box.height, box.depth), room)):
+            return factor, False
+        group.scale(Vector(factor, factor, factor), SceneNode.TransformSpace.Local)
+        box = model.getBoundingBox()
+        if box is not None:
+            # Back onto the plate; and to the middle when it now sticks out over the edge.
+            # (Cura's scene always has the middle of the plate at zero.)
+            outside = (box.left < -room[0] / 2 or box.right > room[0] / 2
+                       or box.back < -room[2] / 2 or box.front > room[2] / 2)
+            move = Vector(-box.center.x if outside else 0, -box.bottom, -box.center.z if outside else 0)
+            group.translate(move, SceneNode.TransformSpace.World)
+        return factor, True
+
+    def _setOnNode(self, node, settings: Dict[str, object]) -> None:
+        from UM.Settings.SettingInstance import SettingInstance
+        stack = node.callDecoration("getStack")
+        if stack is None:
+            from cura.Settings.SettingOverrideDecorator import SettingOverrideDecorator
+            node.addDecorator(SettingOverrideDecorator())
+            stack = node.callDecoration("getStack")
+        container = stack.getTop()
+        for key, value in settings.items():
+            instance = container.getInstance(key)
+            self._saved_parts.append((container, key, _MISSING if instance is None else instance.value))
+            if instance is None:
+                instance = SettingInstance(stack.getSettingDefinition(key), container)
+                instance.setProperty("value", value)
+                instance.resetState()
+                container.addInstance(instance)
+            else:
+                container.setProperty(key, "value", value)
+
+    def _showHoles(self, name: str) -> None:
+        message = self._show("<b>%s</b> heeft een uitsparing die Bambu Studio wegsnijdt. Cura zou die dichtprinten; "
+                             "Ultifixer laat Cura er nu ook een gat van maken.%s"
+                             % (name, "<br/>" + self._size_note if self._size_note else ""),
+                             "Ultifixer: uitsparing herkend", lifetime=30, keep=True)
+        message.addAction("undo_parts", "Ongedaan maken", "", "Print de uitsparing weer als gewoon onderdeel",
+                          button_style=Message.ActionButtonStyle.SECONDARY)
+        message.actionTriggered.connect(self._onMessageAction)
+        message.show()
+
+    def undoParts(self) -> None:
+        self._putBack(self._saved_parts)
+        self._saved_parts = []
+        for hole in self._hole_nodes:
+            if hole.getParent() is not None:
+                hole.setParent(None)
+        self._hole_nodes = []
+        self._record("parts_restored", reason="user")
 
     def _apply(self, nodes, source: Optional[VaseSourceSettings], name: str, why: str, automatic: bool) -> None:
         stack = self._app.getGlobalContainerStack()
@@ -303,6 +550,8 @@ class Ultifixer(QObject, Extension):
         message.hide()
         if action_id == "undo":
             self.undoVaseMode()
+        elif action_id == "undo_parts":
+            self.undoParts()
         elif action_id == "never":
             if self.autoDetect:
                 self.toggleAutoDetect()

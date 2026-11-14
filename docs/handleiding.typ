@@ -259,6 +259,8 @@ en hoef je maar één keer te doen.
 - *Toch geen vaas?* Klik in de melding op #ui[Ongedaan maken], of kies #ui[Extensies] › #ui[Ultifixer] › #ui[Vaasmodus uitzetten].
 - *Liever niets automatisch?* Klik op #ui[Niet meer automatisch]. Via het menu kun je het later weer aanzetten.
 - *Meerdere modellen tegelijk?* De vaasmodus geldt voor alles op het bed. Print een vaas daarom het liefst alleen.
+- *Melding "uitsparing herkend"?* Sommige vazen zijn een dicht blok waar Bambu Studio een gat uit snijdt. Cura
+  vergeet dat gat; Ultifixer zet het terug. Zo'n vaas print met gewone wanden en vulling, niet in vaasmodus.
 - *Welke nozzle?* Ultifixer kijkt welke printkern erin zit. Met een AA 0.4 wordt de wand 0,6 mm.
 
 == Verwijderen

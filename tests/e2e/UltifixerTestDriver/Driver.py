@@ -74,7 +74,7 @@ class Driver(QObject, Extension):
     def _tick(self) -> None:
         if self._waiting is None:
             return
-        condition, _timeout, label = self._waiting
+        condition, _timeout, label, quiet = self._waiting
         try:
             ok = condition()
         except Exception:
@@ -82,11 +82,18 @@ class Driver(QObject, Extension):
         if ok:
             self._advance(True)
         elif time.time() > self._deadline:
-            self._results["errors"].append("timeout waiting for %s" % label)
+            if not quiet:
+                self._results["errors"].append("timeout waiting for %s" % label)
             self._advance(False)
 
-    def _wait(self, condition, timeout, label):
-        return (condition, timeout, label)
+    def _wait(self, condition, timeout, label, quiet=False):
+        """Wait until the condition holds. A timeout is an error, unless quiet (the caller then retries)."""
+        return (condition, timeout, label, quiet)
+
+    def _pause(self, seconds):
+        """Really wait: Cura needs a moment to place a model and to check it fits the printer."""
+        until = time.time() + seconds
+        return (lambda: time.time() >= until, seconds + 5, "pause", True)
 
     def _save(self, name: str = "results.json") -> None:
         os.makedirs(self._out, exist_ok=True)
@@ -124,7 +131,40 @@ class Driver(QObject, Extension):
         fixer = self._ultifixer()
         if fixer is not None:
             fixer._saved_values = []
+            fixer._saved_parts = []
+            fixer._hole_nodes = []
             fixer._vase_nodes = []
+
+    def _holes(self) -> list:
+        """Cutting meshes on the bed as cylinders in G-code coordinates (x, y, radius, z range)."""
+        from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator
+        stack = self._app.getGlobalContainerStack()
+        centered = bool(stack.getProperty("machine_center_is_zero", "value"))
+        shift_x = 0 if centered else stack.getProperty("machine_width", "value") / 2
+        shift_y = 0 if centered else stack.getProperty("machine_depth", "value") / 2
+        holes = []
+        for node in DepthFirstIterator(self._app.getController().getScene().getRoot()):
+            if not node.callDecoration("isCuttingMesh") or node.getMeshData() is None:
+                continue
+            box = node.getBoundingBox()
+            holes.append({"name": node.getName(), "x": box.center.x + shift_x, "y": shift_y - box.center.z,
+                          "radius": min(box.width, box.depth) / 2,
+                          "box": [box.left, box.bottom, box.back, box.right, box.top, box.front], "z_low": box.bottom, "z_high": box.top,
+                          "settings": {key: node.callDecoration("getStack").getProperty(key, "value")
+                                       for key in ("cutting_mesh", "wall_line_count", "infill_sparse_density",
+                                                   "top_layers", "bottom_layers")}})
+        return holes
+
+    def _tree(self) -> list:
+        from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator
+        rows = []
+        for node in DepthFirstIterator(self._app.getController().getScene().getRoot()):
+            if node.callDecoration("isSliceable") or node.callDecoration("isGroup"):
+                box = node.getBoundingBox()
+                rows.append({"name": node.getName(), "id": node.getId(), "group": bool(node.callDecoration("isGroup")),
+                             "parent": node.getParent().getName() if node.getParent() else None,
+                             "box": None if box is None else [box.left, box.bottom, box.back, box.right, box.top, box.front]})
+        return rows
 
     def _screenshot(self, name: str) -> str:
         folder = os.path.join(self._out, "screenshots")
@@ -170,7 +210,7 @@ class Driver(QObject, Extension):
             Logger.log("i", "UltifixerTestDriver: scenario %s", scenario["name"])
             fixer = self._ultifixer()
             self._reset()
-            yield self._wait(lambda: True, 1, "reset")
+            yield self._pause(1)
             self._app.getPreferences().setValue("ultifixer/auto_detect", scenario.get("auto", True))
             first_event = len(fixer.events) if fixer else 0
             self._files_done.clear()
@@ -179,10 +219,12 @@ class Driver(QObject, Extension):
             self._app.readLocalFile(QUrl.fromLocalFile(path), "open_as_model")
             yield self._wait(lambda: path in self._files_done, 60, "load " + path)
             yield self._wait(lambda: fixer is None or fixer.busy == 0, 60, "analysis")
-            yield self._wait(lambda: True, 1, "settle")
+            yield self._pause(1)
             result["events"] = fixer.events[first_event:] if fixer else []
             result["settings"] = self._settings()
             result["active"] = bool(fixer and fixer.isActive)
+            result["holes"] = self._holes()
+            result["nodes"] = self._tree()
 
             for action in scenario.get("actions", []):
                 if action == "menu_make_vase":
@@ -192,10 +234,10 @@ class Driver(QObject, Extension):
                 elif action == "delete_all":
                     self._app.deleteAll()
                 elif action.startswith("screenshot:"):
-                    yield self._wait(lambda: True, 2, "render")
+                    yield self._pause(2)
                     result.setdefault("screenshots", []).append(self._screenshot(action.split(":", 1)[1]))
                     continue
-                yield self._wait(lambda: True, 1, action)
+                yield self._pause(1)
                 result.setdefault("after", []).append({"action": action, "settings": self._settings(),
                                                        "active": bool(fixer and fixer.isActive),
                                                        "events": fixer.events[first_event:] if fixer else []})
@@ -203,10 +245,11 @@ class Driver(QObject, Extension):
             if scenario.get("slice"):
                 for attempt in range(3):
                     # A stale "error" from the previous engine being stopped can arrive first; retry.
-                    yield self._wait(lambda: True, 2, "engine idle")
+                    yield self._pause(2)
                     self._backend_state = None
                     backend.forceSlice()
-                    yield self._wait(lambda: self._backend_state in (3, 4), 300, "slice " + scenario["name"])
+                    # Quiet: a slice that never reports back is tried again, like one that fails.
+                    yield self._wait(lambda: self._backend_state in (3, 4), 240, "slice " + scenario["name"], quiet=True)
                     if self._backend_state == 3:
                         break
                     Logger.log("w", "UltifixerTestDriver: slice attempt %d ended in state %s", attempt + 1, self._backend_state)
@@ -221,7 +264,7 @@ class Driver(QObject, Extension):
                 for shot in scenario.get("after_slice_screenshots", []):
                     if shot.startswith("preview:"):
                         self._app.getController().setActiveStage("PreviewStage")
-                        yield self._wait(lambda: True, 6, "preview")
+                        yield self._pause(6)
                         result.setdefault("screenshots", []).append(self._screenshot(shot.split(":", 1)[1]))
                         self._app.getController().setActiveStage("PrepareStage")
-                        yield self._wait(lambda: True, 2, "prepare")
+                        yield self._pause(2)

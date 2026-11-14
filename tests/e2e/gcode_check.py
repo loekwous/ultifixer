@@ -112,3 +112,31 @@ def summarise(path: str) -> GcodeSummary:
             except ValueError:
                 pass
     return summary
+
+
+def extrusion_inside(path: str, center_x: float, center_y: float, radius: float, z_low: float, z_high: float) -> float:
+    """Millimetres of extrusion whose middle lies inside a vertical cylinder (a hole that must stay empty)."""
+    x = y = z = None
+    e = 0.0
+    inside = 0.0
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if not (line.startswith("G1") or line.startswith("G0")):
+                if line.startswith("G92"):
+                    axes = {k: float(v) for k, v in _AXES.findall(line)}
+                    e = axes.get("E", e)
+                continue
+            axes = {k: float(v) for k, v in _AXES.findall(line.split(";")[0])}
+            match = _Z.search(line)
+            if match:
+                z = float(match.group(1))
+            new_x, new_y = axes.get("X", x), axes.get("Y", y)
+            extruding = "E" in axes and axes["E"] > e
+            if "E" in axes:
+                e = axes["E"]
+            if extruding and None not in (x, y, z, new_x, new_y) and z_low <= z <= z_high:
+                middle_x, middle_y = (x + new_x) / 2, (y + new_y) / 2
+                if (middle_x - center_x) ** 2 + (middle_y - center_y) ** 2 < radius ** 2:
+                    inside += ((new_x - x) ** 2 + (new_y - y) ** 2) ** 0.5
+            x, y = new_x, new_y
+    return inside

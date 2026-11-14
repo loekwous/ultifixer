@@ -26,7 +26,9 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from gcode_check import summarise  # noqa: E402
+sys.path.insert(0, os.path.join(HERE, "..", "..", "plugin"))
+from gcode_check import extrusion_inside, summarise  # noqa: E402
+from Ultifixer.project_settings import read_3mf_settings  # noqa: E402
 
 VASE = "vase"
 NOT_VASE = "not_vase"
@@ -43,6 +45,8 @@ def scenarios(fixtures, private):
         ("plain_3mf_by_shape", f("plain_vase.3mf"), VASE, {}),
         ("prusa_3mf", f("prusa_vase.3mf"), VASE, {}),
         ("multi_body_stl", f("ribbed_pillar.stl"), VASE, {"slice": True}),
+        ("gap_ribs_stl", f("gap_ribs.stl"), VASE, {"slice": True}),
+        ("bambu_negative_part", f("bambu_negative_part.3mf"), NOT_VASE, {"slice": True, "hole": "centered"}),
         ("hollow_cup_untouched", f("hollow_cup.stl"), NOT_VASE, {}),
         ("ball_untouched", f("ball.stl"), NOT_VASE, {}),
         ("block_untouched", f("block.stl"), NOT_VASE, {"slice": True}),
@@ -56,7 +60,12 @@ def scenarios(fixtures, private):
         for name in sorted(os.listdir(private)):
             if name.lower().endswith((".stl", ".3mf")):
                 safe = re.sub(r"[^A-Za-z0-9]+", "_", os.path.splitext(name)[0]).strip("_").lower()
-                plan.append(("private_" + safe, os.path.join(private, name), VASE, {"slice": True}))
+                path = os.path.join(private, name)
+                source = read_3mf_settings(path) if name.lower().endswith(".3mf") else None
+                if source is not None and source.slicer and not source.spiral_mode:
+                    plan.append(("private_" + safe, path, NOT_VASE, {"slice": True, "hole": source.has_negative_parts}))
+                else:
+                    plan.append(("private_" + safe, path, VASE, {"slice": True}))
     return plan
 
 
@@ -109,7 +118,7 @@ def prepare_home(home, version_dir):
     os.makedirs(config, exist_ok=True)
     with open(os.path.join(config, "cura.cfg"), "w", encoding="utf-8") as handle:
         handle.write("[general]\nversion = 7\naccepted_user_agreement = True\nauto_slice = False\n"
-                     "[info]\nsend_slice_info = False\nasked_send_slice_info = True\nautomatic_update_check = False\n"
+                     "[info]\nsend_slice_info = False\nsend_engine_crash = False\nasked_send_slice_info = True\nautomatic_update_check = False\n"
                      "automatic_plugin_update_check = False\n"
                      "[cura]\nchoice_on_open_project = open_as_model\nselect_models_on_load = True\n")
     plugins = os.path.join(home, ".local", "share", "cura", version_dir, "plugins", "UltifixerTestDriver")
@@ -159,6 +168,30 @@ def check(results, plan):
                     failures.append("%s: G-code is not a hollow spiral vase" % name)
                 if expectation == NOT_VASE and not summary.has_infill_or_inner_walls():
                     failures.append("%s: G-code unexpectedly has no infill or inner walls" % name)
+                if extra.get("hole"):
+                    holes = scenario.get("holes") or []
+                    if not holes:
+                        failures.append("%s: the negative part was not turned into a hole" % name)
+                    solid = [n["box"] for n in scenario.get("nodes", []) if not n["group"] and n["name"] != "Uitsparing" and n["box"]]
+                    for hole in holes:
+                        if extra.get("hole") == "centered" and solid:
+                            left, _bottom, back, right, _top, front = solid[0]
+                            middle = ((hole["box"][0] + hole["box"][3]) / 2, (hole["box"][2] + hole["box"][5]) / 2)
+                            if abs(middle[0] - (left + right) / 2) > 0.5 or abs(middle[1] - (back + front) / 2) > 0.5:
+                                failures.append("%s: the hole is not in the middle of the model" % name)
+                            if abs(hole["z_low"] - 3.0) > 0.3:
+                                failures.append("%s: the hole starts at %.1f mm, expected 3 mm" % (name, hole["z_low"]))
+                        # Stay clear of the wall around the hole and of the layers at its bottom. A real
+                        # hole need not be a cylinder, so there only its core is checked.
+                        radius = hole["radius"] - 2.0 if extra.get("hole") == "centered" else hole["radius"] * 0.6
+                        filled = extrusion_inside(gcode, hole["x"], hole["y"], radius,
+                                                  hole["z_low"] + 1.0, hole["z_high"])
+                        if filled > 1.0:
+                            failures.append("%s: %.0f mm of plastic printed inside the hole" % (name, filled))
+                        notes.append("hole r=%.0f mm from z=%.1f: %.0f mm plastic inside" % (hole["radius"], hole["z_low"], filled))
+                    if extra.get("hole") == "centered" and solid and abs((solid[0][4] - solid[0][1]) - 80.0) > 0.2:
+                        failures.append("%s: model is %.1f mm high, expected 80 (part scale not applied)"
+                                        % (name, solid[0][4] - solid[0][1]))
                 notes.append("G-code: %d layers, %s, %.1f cm3 filament" % (
                     summary.layer_count, "hollow spiral" if summary.is_spiral_vase() else "filled",
                     summary.volume_used_mm3 / 1000))
@@ -174,6 +207,7 @@ def main():
     parser.add_argument("--private", default=os.path.join(HERE, "..", "fixtures", "private"))
     parser.add_argument("--out", required=True)
     parser.add_argument("--timeout", type=int, default=1200)
+    parser.add_argument("--only", default="", help="regular expression: run only the scenarios whose name matches")
     args = parser.parse_args()
 
     cura_dir = os.path.abspath(args.cura)
@@ -191,8 +225,9 @@ def main():
     print("Package scheduled for install, restarting Cura", flush=True)
 
     plan_json = {"mode": "scenarios", "scenarios": [
-        dict({"name": name, "file": path}, **{k: v for k, v in extra.items() if k != "expect_after"})
-        for name, path, _expectation, extra in plan]}
+        dict({"name": name, "file": path}, **{k: v for k, v in extra.items() if k not in ("expect_after", "hole")})
+        for name, path, _expectation, extra in plan if not args.only or re.search(args.only, name)]}
+    plan = [row for row in plan if not args.only or re.search(args.only, row[0])]
     results = run_cura(cura_dir, home, plan_json, out, args.timeout)
     failures, rows = check(results, plan)
     failures = list(results.get("errors", [])) + failures
