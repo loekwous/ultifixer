@@ -190,3 +190,10 @@ def test_private_calla_vase_has_a_negative_part():
     assert found.has_negative_parts and not found.spiral_mode
     shapes = read_negative_parts(path, found)
     assert sum(len(v.holes) for v in shapes.values()) == 1
+
+
+def test_plan_keeps_small_outlines():
+    # Rib bodies of "Make My Vase" models are only ~8 mm around; dropping small outlines loses the ribs.
+    plan = make_plan(None, 0.4)
+    assert "minimum_polygon_circumference" not in plan.global_settings
+    assert "minimum_polygon_circumference" not in plan.extruder_settings

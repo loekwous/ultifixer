@@ -20,6 +20,13 @@ class GcodeSummary:
     runs_per_layer: Dict[int, int] = field(default_factory=dict)  # separate extrusion runs
     longest_move_per_layer: Dict[int, float] = field(default_factory=dict)  # longest single extruded move, mm
     header: Dict[str, str] = field(default_factory=dict)
+    printed_box: List[float] = field(default_factory=list)  # min x, min y, max x, max y above the first layer
+
+    def printed_size(self):
+        """Width and depth of everything printed above the first layer (which may hold a brim or skirt)."""
+        if not self.printed_box:
+            return 0.0, 0.0
+        return self.printed_box[2] - self.printed_box[0], self.printed_box[3] - self.printed_box[1]
 
     def middle_layers(self) -> List[int]:
         layers = sorted(l for l in self.types_per_layer if l >= 0)
@@ -100,6 +107,13 @@ def summarise(path: str) -> GcodeSummary:
                             if not in_run:
                                 summary.runs_per_layer[layer] = summary.runs_per_layer.get(layer, 0) + 1
                             in_run = True
+                            if layer >= 1:
+                                box = summary.printed_box
+                                if not box:
+                                    box.extend([min(x, new_x), min(y, new_y), max(x, new_x), max(y, new_y)])
+                                else:
+                                    box[0], box[1] = min(box[0], x, new_x), min(box[1], y, new_y)
+                                    box[2], box[3] = max(box[2], x, new_x), max(box[3], y, new_y)
                             if distance > summary.longest_move_per_layer.get(layer, 0.0):
                                 summary.longest_move_per_layer[layer] = distance
                         elif distance > 0.01:

@@ -5,6 +5,8 @@ Stap voor stap met plaatjes: `Ultifixer-handleiding.pdf`.
 - STL en 3MF zonder instellingen: herkend aan de vorm, anders via *Extensies › Ultifixer › Maak er een vaas van*.
 - **Nieuw in 0.2:** Bambu-3MF met een uitsparing (*negative part*): Cura print die als massief blok; Ultifixer maakt
   er weer een gat van en zet het model op de bedoelde grootte en midden op het bed.
+- **Hersteld in 0.2.1:** "Make My Vase"-modellen (Stratos Pillar) werden in 0.2.0 een gladde vaas; de ribben
+  worden nu weer geprint.
 - **Nieuw in 0.2:** "Make My Vase"-modellen (kern met losse ribben, zoals Stratos Pillar) geven geen lijnen dwars
   door de vaas meer.
 - Melding met *Ongedaan maken* en *Niet meer automatisch*; vaas van het bed = gewone instellingen terug.

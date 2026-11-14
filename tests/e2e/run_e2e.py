@@ -34,6 +34,9 @@ VASE = "vase"
 NOT_VASE = "not_vase"
 
 
+MAX_SHRINK_MM = 1.5  # a spiral runs half a wall width inside the model on each side
+
+
 def scenarios(fixtures, private):
     f = lambda name: os.path.join(fixtures, name)
     plan = [
@@ -166,6 +169,17 @@ def check(results, plan):
                 summary = summarise(gcode)
                 if expectation == VASE and not summary.is_spiral_vase():
                     failures.append("%s: G-code is not a hollow spiral vase" % name)
+                # The spiral must follow the whole model. Ribs that are separate bodies are easily lost,
+                # which leaves a smooth vase that is narrower than the model.
+                boxes = [n["box"] for n in scenario.get("nodes", []) if not n["group"] and n["box"]]
+                if expectation == VASE and boxes:
+                    model = (max(b[3] for b in boxes) - min(b[0] for b in boxes),
+                             max(b[5] for b in boxes) - min(b[2] for b in boxes))
+                    printed = summary.printed_size()
+                    if min(printed[0] - model[0], printed[1] - model[1]) < -MAX_SHRINK_MM:
+                        failures.append("%s: print is %.1f x %.1f mm, model is %.1f x %.1f mm (ribs or outer shape lost)"
+                                        % (name, printed[0], printed[1], model[0], model[1]))
+                    notes.append("print %.1f x %.1f mm of model %.1f x %.1f" % (printed + model))
                 if expectation == NOT_VASE and not summary.has_infill_or_inner_walls():
                     failures.append("%s: G-code unexpectedly has no infill or inner walls" % name)
                 if extra.get("hole"):

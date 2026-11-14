@@ -14,7 +14,6 @@ from .project_settings import NEGATIVE_PART, NORMAL_PART, VaseSourceSettings
 DEFAULT_BOTTOM_MM = 1.0
 MAX_WIDTH_FACTOR = 1.5  # a 0.4 mm nozzle prints walls up to 0.6 mm wide
 MERGE_OFFSET_MM = 0.05
-MIN_OUTLINE_MM = 20.0
 
 
 @dataclass
@@ -49,8 +48,6 @@ def make_plan(source: Optional[VaseSourceSettings], nozzle_size: float) -> VaseP
         global_settings={
             "magic_spiralize": True,
             "smooth_spiralized_contours": smooth,
-            # Drop tiny leftover outlines; in vase mode only the big outer outline matters.
-            "minimum_polygon_circumference": MIN_OUTLINE_MM,
         },
         extruder_settings={
             "wall_line_width_0": wall_width,
